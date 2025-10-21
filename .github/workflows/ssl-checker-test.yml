@@ -1,0 +1,69 @@
+name: Scheduled Certificate Expiration Check
+
+# 1. SCHEDULER: Runs the job once per week (Monday at 08:00 UTC)
+# You can change this to '*/3 * * * *' for testing every 3 minutes.
+on:
+  schedule:
+    # Runs every Monday at 8:00 AM UTC
+    - cron: '0 8 * * 1'
+  # Allows manual triggering for testing
+  workflow_dispatch:
+
+jobs:
+  cert-check-job:
+    runs-on: ubuntu-latest
+    
+    # 2. SECRETS: Map repository secrets to environment variables 
+    #    so the Python script can read them securely.
+    env:
+      NTRIP_USERNAME: ${{ secrets.NTRIP_USERNAME }}
+      NTRIP_PASSWORD: ${{ secrets.NTRIP_PASSWORD }}
+      
+      # Slack Webhook URLs
+      SLACK_WEBHOOK_TEST_URL: ${{ secrets.SLACK_WEBHOOK_TEST_URL }}
+      SLACK_WEBHOOK_NOC_URL: ${{ secrets.SLACK_WEBHOOK_NOC_URL }}
+      SLACK_WEBHOOK_ALERTS_URL: ${{ secrets.SLACK_WEBHOOK_ALERTS_URL }}
+      
+      # PagerDuty Routing Keys
+      PAGERDUTY_ROUTING_KEY_PROD: ${{ secrets.PAGERDUTY_ROUTING_KEY_PROD }}
+      PAGERDUTY_ROUTING_KEY_TEST: ${{ secrets.PAGERDUTY_ROUTING_KEY_TEST }}
+      
+    steps:
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+        # We assume the default GITHUB_TOKEN is enough here since no private dependencies are involved.
+        # If private dependencies are needed, use a custom PAT here.
+
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Python Dependencies (requests)
+        run: |
+          # The requests library is required for Slack/PagerDuty API calls
+          python -m pip install --upgrade pip
+          pip install requests
+
+      # 3. SETUP: Install the swift CLI tool using a pre-compiled binary URL
+      # NOTE: You MUST replace this URL with the actual, known-good binary download link for Linux.
+      - name: Install Swift CLI Tool
+        id: install_swift
+        env:
+          SWIFT_CLI_URL: "https://github.com/swift-nav/swift-cli/releases/download/v0.20.0/swift-cli-v0.20.0-x86_64-unknown-linux-musl.tar.gz"
+          CLI_DIR: ${{ runner.temp }}/swift-cli
+        run: |
+          echo "Downloading Swift CLI from $SWIFT_CLI_URL"
+          curl -L $SWIFT_CLI_URL -o swift-cli.tar.gz
+          
+          mkdir -p $CLI_DIR
+          tar -xzf swift-cli.tar.gz -C $CLI_DIR
+          
+          # Add the tool's directory to the runner's PATH
+          echo "$CLI_DIR" >> $GITHUB_PATH
+          echo "Swift CLI installed to $CLI_DIR and added to PATH."
+
+      - name: Execute Certificate Checker Script
+        # Run the Python script directly. It reads config from environment.
+        run: |
+          python ssl_checker.py
